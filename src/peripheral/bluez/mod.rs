@@ -125,26 +125,27 @@ impl PeripheralImpl for Peripheral {
         };
         let adv_handle: AdvertisementHandle = self.adapter.advertise(le_advertisement).await?;
 
-        let (handlers, services) = parse_services(self.services.clone(), self.sender_tx.clone());
+        if self.app_handle.is_none() {
+            let (handlers, services) = parse_services(self.services.clone(), self.sender_tx.clone());
 
-        let app_handle = self
-            .adapter
-            .serve_gatt_application(Application {
-                services,
-                ..Default::default()
-            })
-            .await?;
+            let app_handle = self
+                .adapter
+                .serve_gatt_application(Application {
+                    services,
+                    ..Default::default()
+                })
+                .await?;
 
-        self.setup_char_handlers(handlers);
+            self.setup_char_handlers(handlers);
+            self.app_handle = Some(app_handle);
+        }
 
         self.adv_handle = Some(adv_handle);
-        self.app_handle = Some(app_handle);
         Ok(())
     }
 
     async fn stop_advertising(&mut self) -> Result<(), Error> {
         self.adv_handle = None;
-        self.app_handle = None;
         Ok(())
     }
 
