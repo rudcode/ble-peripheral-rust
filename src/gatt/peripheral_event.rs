@@ -6,6 +6,12 @@ pub enum PeripheralEvent {
     StateUpdate {
         is_powered: bool,
     },
+    DeviceConnected {
+        client: String,
+    },
+    DeviceDisconnected {
+        client: String,
+    },
     CharacteristicSubscriptionUpdate {
         request: PeripheralRequest,
         subscribed: bool,

@@ -15,7 +15,7 @@ use bluer::{
         local::{Application, ApplicationHandle, CharacteristicControlEvent},
         CharacteristicWriter,
     },
-    Adapter, AdapterEvent, AdapterProperty,
+    Adapter, AdapterEvent, AdapterProperty, DeviceEvent, DeviceProperty,
 };
 use bluez_utils::CharNotifyHandler;
 use characteristic_utils::parse_services;
@@ -57,26 +57,70 @@ impl PeripheralImpl for Peripheral {
         let (drop_tx, drop_rx) = oneshot::channel();
         if let Ok(mut adapter_stream) = adapter.events().await {
             let sender = sender_tx.clone();
+            let adapter_clone = adapter.clone();
             tokio::spawn(async move {
                 let stream_future = async {
-                    while let Some(AdapterEvent::PropertyChanged(event)) =
-                        adapter_stream.next().await
-                    {
+                    while let Some(event) = adapter_stream.next().await {
                         match event {
-                            AdapterProperty::ActiveAdvertisingInstances(i) => {
-                                log::debug!("ActiveAdvertisingInstances: {i}")
-                            }
-                            AdapterProperty::Powered(powered) => {
-                                if let Err(err) = sender
-                                    .send(PeripheralEvent::StateUpdate {
-                                        is_powered: powered,
-                                    })
-                                    .await
-                                {
-                                    log::error!("Error sending state update event: {:?}", err);
+                            AdapterEvent::PropertyChanged(prop) => {
+                                match prop {
+                                    AdapterProperty::ActiveAdvertisingInstances(i) => {
+                                        log::debug!("ActiveAdvertisingInstances: {i}")
+                                    }
+                                    AdapterProperty::Powered(powered) => {
+                                        if let Err(err) = sender
+                                            .send(PeripheralEvent::StateUpdate {
+                                                is_powered: powered,
+                                            })
+                                            .await
+                                        {
+                                            log::error!("Error sending state update event: {:?}", err);
+                                        }
+                                    }
+                                    _ => {}
                                 }
                             }
-                            _ => {}
+                            AdapterEvent::DeviceAdded(address) => {
+                                let sender_clone = sender.clone();
+                                let device = match adapter_clone.device(address) {
+                                    Ok(d) => d,
+                                    Err(err) => {
+                                        log::error!("Failed to get device {}: {:?}", address, err);
+                                        continue;
+                                    }
+                                };
+                                tokio::spawn(async move {
+                                    if let Ok(mut device_stream) = device.events().await {
+                                        let mut last_connected = false;
+                                        while let Some(device_event) = device_stream.next().await {
+                                            if let DeviceEvent::PropertyChanged(DeviceProperty::Connected(connected)) = device_event {
+                                                if connected && !last_connected {
+                                                    if let Err(err) = sender_clone
+                                                        .send(PeripheralEvent::DeviceConnected {
+                                                            client: address.to_string(),
+                                                        })
+                                                        .await
+                                                    {
+                                                        log::error!("Error sending device connected event: {:?}", err);
+                                                    }
+                                                } else if !connected && last_connected {
+                                                    if let Err(err) = sender_clone
+                                                        .send(PeripheralEvent::DeviceDisconnected {
+                                                            client: address.to_string(),
+                                                        })
+                                                        .await
+                                                    {
+                                                        log::error!("Error sending device disconnected event: {:?}", err);
+                                                        break;
+                                                    }
+                                                }
+                                                last_connected = connected;
+                                            }
+                                        }
+                                    }
+                                });
+                            }
+                            AdapterEvent::DeviceRemoved(_) => {}
                         }
                     }
                 };
